@@ -1,0 +1,13 @@
+{
+    "KEY" : "",
+    "SECRET" : "",
+    "LINETOKEN" : "",
+    "LINE" : 0,
+    "COIN" : "KUB",
+    "ORDERSIZE" : 100,
+    "MAX_ORDER" : 30,
+    "PRICERANGE" : 1,
+    "CLEAR_EVERY_BE" : 2,
+    "CLEAR_ORDER_COUNT" : 1,
+    "STOPNEXTCIRCLE" : 1
+}
