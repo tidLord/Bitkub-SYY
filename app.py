@@ -1,565 +1,788 @@
-#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import websocket, json, datetime, sqlite3, hashlib, hmac, requests, random, datetime
-def savelog(msg):
+
+bot_title = 'Bitkub-SYY 2.0 (Build 27) by tidLord'
+
+# system setup
+botSetup_system_delay = 3
+botSetup_ts_threshold = 60 # ค่าระยะห่าง(หน่วยเป็นวินาที) ไว้เช็คเมื่อบอทหยุดทำงาน
+botSetup_pid_threshold = 0 # ค่าระยะเวลาตรวจจับ last_active ป้องกันบอทรันซ้อนกัน
+botSetup_orders_verbose = True # เก็บรายละเอียดออเดอร์เข้า orders_verbose.txt
+botSetup_decimal_thb = 4 # จำนวนทศนิยม THB amount
+botSetup_decimal_coin = 8 # จำนวนทศนิยม COIN amount
+
+# system file name
+fileName_config = 'config'
+fileName_log = 'log'
+fileName_orders_verbose = 'orders_verbose'
+fileName_stat = 'stat'
+fileName_temp = 'temp'
+fileName_last_active = 'last_active'
+fileName_database = 'Bitkub_SYY'
+
+import os, json, hmac, requests, hashlib, time, random, sqlite3, termtables, websocket
+from datetime import datetime
+from numpy import format_float_positional
+from pytz import timezone
+
+# สำหรับ Windows OS
+if os.name == 'nt':
+    from colorama import Back, Fore, Style, init
+    init()
+    import ctypes
+    ctypes.windll.kernel32.SetConsoleTitleW(bot_title)
+else:
+    from colorama import Back, Fore, Style
+    
+# โหลด config (return -> dict / error -> 0 int)
+def read_config():
     try:
-        f = open("log.txt", "r", encoding='utf-8')
-        d = f.read()
-        f.close()
-        f = open("log.txt", "w", encoding='utf-8')
-        f.write('\n'+str(datetime.datetime.now())+'\n'+str(msg)+'\n'+d)
-        f.close()
-    except:
-        f = open("log.txt", "w", encoding='utf-8')
-        f.write('\n'+str(datetime.datetime.now())+'\n'+str(msg)+'\n')
-        f.close()
+        fileName_config_json = fileName_config + '.json'
+        with open(fileName_config_json, 'r', encoding='utf-8') as config:
+            config = json.load(config)
+            if config['MAX_ORDER'] > 100:
+                config['MAX_ORDER'] = 100
+            return config
+    except Exception as error_is:
+        print('config : ' + str(error_is))
+        return 0
+
+# ฟังก์ชั่นเชื่อมต่อกับบิทคับ RESTful : Bitkub-Middleman => https://github.com/tidLord/Bitkub-Middleman
+def bitkub(reqType, reqPath, reqBody, reqCredentials):
+    def gen_sign(api_secret, payload_string=None):
+        return hmac.new(api_secret.encode('utf-8'), payload_string.encode('utf-8'), hashlib.sha256).hexdigest()
+    host = 'https://api.bitkub.com'
+    ts = requests.get(host + '/api/v3/servertime').text
+    url = host + reqPath
+    payload = []
+    payload.append(ts)
+    headers = {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'X-BTK-TIMESTAMP': ts,
+        'X-BTK-APIKEY': reqCredentials['apiKey']
+    }
+    if reqType == 'GET':
+        def gen_query_param(url, query_param):
+            req = requests.PreparedRequest()
+            req.prepare_url(url, query_param)
+            return req.url.replace(url, '')
+        query_param = gen_query_param(host+reqPath, reqBody)
+        payload.append('GET')
+        payload.append(reqPath)
+        payload.append(query_param)
+        sig = gen_sign(reqCredentials['secretKey'], ''.join(payload))
+        headers['X-BTK-SIGN'] = sig
+        response = requests.request('GET', f'{host}{reqPath}{query_param}', headers=headers, data={}, verify=True)
+        return response.json()
+    if reqType == 'POST':
+        payload.append('POST')
+        payload.append(reqPath)
+        payload.append(json.dumps(reqBody))
+        sig = gen_sign(reqCredentials['secretKey'], ''.join(payload))
+        headers['X-BTK-SIGN'] = sig
+        response = requests.request('POST', url, headers=headers, data=json.dumps(reqBody), verify=True)
+        return response.json()
+    
+# ฟังก์ชั่นตัดทศนิยมแบบไม่ปัดเศษ(return -> string)
+def number_truncate(number, precision):
+    return format_float_positional(number, unique=True, precision=precision, trim='0')
+
+# ฟังก์ชั่นเก็บ error ใส่ log file
+def log(msg):
+    fileName_log_txt = fileName_log + '.txt'
+    try:
+        with open(fileName_log_txt, 'r', encoding='utf-8') as f:
+            f = f.read()
+        with open(fileName_log_txt, 'w', encoding='utf-8') as f2:
+            f2.write('\n' + str(datetime.now()) + '\n' + str(msg) + '\n' + f)
+    except FileNotFoundError:
+        with open(fileName_log_txt, 'w', encoding='utf-8') as f:
+            f.write('\n' + str(datetime.now()) + '\n'+str(msg) + '\n')
+    except Exception as error_is:
+        print('log() : ' + str(error_is))
+        
+# ฟังก์ชั่นเก็บรายละเอียดออเดอร์ ( orders verbose ) ใส่ orders verbose file
+def orders_verbose(order_type, order_number, order_detail):
+    if botSetup_orders_verbose == True:
+        fileName_orders_verbose_txt = fileName_orders_verbose + '.txt'
+        try:
+            with open(fileName_orders_verbose_txt, 'r', encoding='utf-8') as f:
+                f = f.read()
+            with open(fileName_orders_verbose_txt, 'w', encoding='utf-8') as f2:
+                f2.write('\n' + str(datetime.now()) + '\norder type : ' + order_type + '\norder number : ' + str(order_number) + '\n' + str(order_detail) + '\n............\n' + f)
+        except FileNotFoundError:
+            with open(fileName_orders_verbose_txt, 'w', encoding='utf-8') as f:
+                f.write('\n' + str(datetime.now()) + '\norder type : ' + order_type + '\norder number : ' + str(order_number) + '\n' + str(order_detail) + '\n............\n')
+        except Exception as error_is:
+            print('orders_verbose() : ' + str(error_is))
+   
+# ฟังก์ชั่นเพิ่มจำนวนไม้ที่เทรดใส่ stat file
+def stat_add_circle_total():
+    fileName_stat_txt = fileName_stat + '.json'
+    try:
+        with open(fileName_stat_txt, 'r', encoding='utf-8') as stat_json:
+            stat_json = json.load(stat_json)
+        stat_json['circle_total'] += 1
+        with open(fileName_stat_txt, 'w', encoding='utf-8') as update_stat_json:
+            json.dump(stat_json, update_stat_json, indent=4)
+    except FileNotFoundError:
+        stat_json = { 'profit_total': 0.0, 'circle_total': 1 }
+        with open(fileName_stat_txt, 'w', encoding='utf-8') as update_stat_json:
+            json.dump(stat_json, update_stat_json, indent=4)
+    except Exception as error_is:
+        log('stat_add_circle_total() : ' + str(error_is))
+         
+# ฟังก์ชั่นเพิ่มยอดกำไรขาดทุนใส่ stat file
+def stat_add_profit_total(qty):
+    fileName_stat_json = fileName_stat + '.json'
+    try:
+        with open(fileName_stat_json, 'r', encoding='utf-8') as stat_json:
+            stat_json = json.load(stat_json)
+        stat_json['profit_total'] += qty
+        with open(fileName_stat_json, 'w', encoding='utf-8') as update_stat_json:
+            json.dump(stat_json, update_stat_json, indent=4)
+    except FileNotFoundError:
+        stat_json = { 'profit_total': qty, 'circle_total': 1 }
+        with open(fileName_stat_json, 'w', encoding='utf-8') as update_stat_json:
+            json.dump(stat_json, update_stat_json, indent=4)
+    except Exception as error_is:
+        log('stat_add_profit_total() : ' + str(error_is))
+        
+# ฟังก์ชั่นอ่าน stat file (return -> dict)
+def stat_read():
+    fileName_stat_json = fileName_stat + '.json'
+    try:
+        with open(fileName_stat_json, 'r', encoding='utf-8') as stat_json:
+            stat_json = json.load(stat_json)
+            return stat_json
+    except FileNotFoundError:
+        stat_json = { 'profit_total': 0, 'circle_total': 0 }
+        with open(fileName_stat_json, 'w', encoding='utf-8') as update_stat_json:
+            json.dump(stat_json, update_stat_json, indent=4)
+        with open(fileName_stat_json, 'r', encoding='utf-8') as stat_json:
+            stat_json = json.load(stat_json)
+            return stat_json
+    except Exception as error_is:
+        log('stat_read() : ' + error_is)
+
+# ฟังก์ชั่นเขียน hash ใส่ temp file (cmd 1 -> buy first, 2 -> buy DCA, 3 -> sell profit, 4 -> sell DCA, 5 -> sell clear)
+def temp_write(hash, cmd, detail):
+    fileName_temp_json = fileName_temp + '.json'
+    try:
+        with open(fileName_temp_json, 'r', encoding='utf-8') as hash_json:
+            hash_json = json.load(hash_json)
+        hash_json['HASH'] = hash
+        hash_json['cmd'] = cmd
+        hash_json['detail'] = detail
+        with open(fileName_temp_json, 'w', encoding='utf-8') as update_hash_json:
+            json.dump(hash_json, update_hash_json, indent=4)
+    except FileNotFoundError:
+        hash_json = {'HASH': hash, 'cmd': cmd, 'detail': detail}
+        with open(fileName_temp_json, 'w', encoding='utf-8') as update_hash_json:
+            json.dump(hash_json, update_hash_json, indent=4)
+    except Exception as error_is:
+        log('temp_write() : ' + str(error_is))
+
+# ฟังก์ชั่นอ่าน temp ใน temp file (return -> dict)
+def temp_read():
+    fileName_temp_json = fileName_temp + '.json'
+    try:
+        with open(fileName_temp_json, 'r', encoding='utf-8') as hash_json:
+            hash_json = json.load(hash_json)
+            return hash_json
+    except FileNotFoundError:
+        hash_json = {'HASH': '', 'cmd': 0, 'detail': ''}
+        with open(fileName_temp_json, 'w', encoding='utf-8') as update_hash_json:
+            json.dump(hash_json, update_hash_json, indent=4)
+        with open(fileName_temp_json, 'r', encoding='utf-8') as hash_json:
+            hash_json = json.load(hash_json)
+            return hash_json
+    except Exception as error_is:
+        log('temp_read() : ' + error_is)
+
+    
+# ฟังก์ชั่นเก็บเวลาการทำงานครั้งล่าสุดใส่ last_active file
+def last_active_update(datetime_now):
+    fileName_last_active_txt = fileName_last_active + '.txt'
+    with open(fileName_last_active_txt, 'w', encoding='utf-8') as last_active:
+        last_active.write(str(datetime_now))
+
+#########################
+### $$$ Websocket $$$ ###
+#########################
+pid_signature = None # pid signature ป้องกันการรันบอทซ้อนกัน
+
 def on_close(connect):
-    savelog('core : การเชื่อมต่อได้หยุดลง')
-def temp(hash):
-    try:
-        fopen = open('temp.json','r', encoding="utf-8")
-        f = json.load(fopen)
-        fopen.close()
-        f['HASH']=hash
-        fopen = open('temp.json','w', encoding="utf-8")
-        json.dump(f,fopen,indent=4)
-        fopen.close()
-    except Exception as error_is:
-        print('temp.json error : '+str(error_is))
-def temp_clear():
-    try:
-        fopen = open('temp.json','r', encoding="utf-8")
-        f = json.load(fopen)
-        fopen.close()
-        f['HASH']=""
-        f['CLEAR']=0
-        fopen = open('temp.json','w', encoding="utf-8")
-        json.dump(f,fopen,indent=4)
-        fopen.close()
-    except Exception as error_is:
-        print('temp.json clear error : '+str(error_is))
-def send_buy_order(rate, ordersize):
-    with open('config.json','r') as openfile:
-        config = json.load(openfile)
-    API_HOST = 'https://api.bitkub.com'
-    API_KEY = config['KEY']
-    API_SECRET = bytes(config['SECRET'], encoding= 'utf-8')
-    def json_encode(data):
-        return json.dumps(data, separators=(',', ':'), sort_keys=True)
-    def sign(data):
-        j = json_encode(data)
-        h = hmac.new(API_SECRET, msg=j.encode(), digestmod=hashlib.sha256)
-        return h.hexdigest()
-    response = requests.get(API_HOST + '/api/servertime')
-    servertime = int(response.text)
-    header = {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        'X-BTK-APIKEY': API_KEY
-    }
-    data = {
-        'sym': 'THB_'+config['COIN'],
-        'amt': ordersize,
-        'rat': rate,
-        'typ': 'limit',
-        'ts': servertime
-    }
-    signature = sign(data)
-    data['sig'] = signature
-    response = requests.post(API_HOST + '/api/market/place-bid', headers=header, data=json_encode(data))
-    ex_response=json.loads(response.text)
-    if ex_response['error']==0:
-        temp(ex_response['result']['hash'])
-        return 1
-    else:
-        savelog('Send buy order error : '+str(ex_response['error']))
-        return 0
-def send_sell_order(rate,amt):
-    with open('config.json','r') as openfile:
-        config = json.load(openfile)
-    API_HOST = 'https://api.bitkub.com'
-    API_KEY = config['KEY']
-    API_SECRET = bytes(config['SECRET'], encoding= 'utf-8')
-    def json_encode(data):
-        return json.dumps(data, separators=(',', ':'), sort_keys=True)
-    def sign(data):
-        j = json_encode(data)
-        h = hmac.new(API_SECRET, msg=j.encode(), digestmod=hashlib.sha256)
-        return h.hexdigest()
-    response = requests.get(API_HOST + '/api/servertime')
-    servertime = int(response.text)
-    header = {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        'X-BTK-APIKEY': API_KEY
-    }
-    data = {
-        'sym': 'THB_'+config['COIN'],
-        'amt': amt,
-        'rat': rate,
-        'typ': 'limit',
-        'ts': servertime
-    }
-    signature = sign(data)
-    data['sig'] = signature
-    response = requests.post(API_HOST + '/api/market/place-ask', headers=header, data=json_encode(data))
-    ex_response=json.loads(response.text)
-    if ex_response['error']==0:
-        temp(ex_response['result']['hash'])
-        return 1
-    else:
-        savelog('Send sell order error : '+str(ex_response['error']))
-        return 0
-def send_sell_order_clear(rate,amt):
-    with open('config.json','r') as openfile:
-        config = json.load(openfile)
-    API_HOST = 'https://api.bitkub.com'
-    API_KEY = config['KEY']
-    API_SECRET = bytes(config['SECRET'], encoding= 'utf-8')
-    def json_encode(data):
-        return json.dumps(data, separators=(',', ':'), sort_keys=True)
-    def sign(data):
-        j = json_encode(data)
-        h = hmac.new(API_SECRET, msg=j.encode(), digestmod=hashlib.sha256)
-        return h.hexdigest()
-    response = requests.get(API_HOST + '/api/servertime')
-    servertime = int(response.text)
-    header = {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        'X-BTK-APIKEY': API_KEY
-    }
-    data = {
-        'sym': 'THB_'+config['COIN'],
-        'amt': amt,
-        'rat': rate,
-        'typ': 'limit',
-        'ts': servertime
-    }
-    signature = sign(data)
-    data['sig'] = signature
-    response = requests.post(API_HOST + '/api/market/place-ask', headers=header, data=json_encode(data))
-    ex_response=json.loads(response.text)
-    if ex_response['error']==0:
-        temp(ex_response['result']['hash'])
-        try:
-            fopen = open('temp.json','r', encoding="utf-8")
-            f = json.load(fopen)
-            fopen.close()
-            f['CLEAR']=1
-            fopen = open('temp.json','w', encoding="utf-8")
-            json.dump(f,fopen,indent=4)
-            fopen.close()
-        except Exception as error_is:
-            print('temp.json sell clear error : '+str(error_is))
-        return 1
-    else:
-        savelog('Send sell order clear error : '+str(ex_response['error']))
-        return 0
-def order_info():
-    with open('config.json','r') as openfile:
-        config = json.load(openfile)
-    with open('temp.json','r') as openfile:
-        rtemp = json.load(openfile)
-    API_HOST = 'https://api.bitkub.com'
-    API_KEY = config['KEY']
-    API_SECRET = bytes(config['SECRET'], encoding= 'utf-8')
-    def json_encode(data):
-        return json.dumps(data, separators=(',', ':'), sort_keys=True)
-    def sign(data):
-        j = json_encode(data)
-        h = hmac.new(API_SECRET, msg=j.encode(), digestmod=hashlib.sha256)
-        return h.hexdigest()
-    response = requests.get(API_HOST + '/api/servertime')
-    servertime = int(response.text)
-    header = {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        'X-BTK-APIKEY': API_KEY
-    }
-    data = {
-        'hash': rtemp['HASH'],
-        'ts': servertime
-    }
-    signature = sign(data)
-    data['sig'] = signature
-    response = requests.post(API_HOST + '/api/market/order-info', headers=header, data=json_encode(data))
-    order_info_res=json.loads(response.text)
-    if order_info_res['error']!=0:
-        savelog('Order info error : '+str(order_info_res['error']))
-    return order_info_res
-def my_history_by_taker(takercount):
-    with open('config.json','r') as openfile:
-        config = json.load(openfile)
-    API_HOST = 'https://api.bitkub.com'
-    API_KEY = config['KEY']
-    API_SECRET = bytes(config['SECRET'], encoding= 'utf-8')
-    def json_encode(data):
-        return json.dumps(data, separators=(',', ':'), sort_keys=True)
-    def sign(data):
-        j = json_encode(data)
-        h = hmac.new(API_SECRET, msg=j.encode(), digestmod=hashlib.sha256)
-        return h.hexdigest()
-    response = requests.get(API_HOST + '/api/servertime')
-    servertime = int(response.text)
-    header = {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        'X-BTK-APIKEY': API_KEY
-    }
-    data = {
-        'sym': 'THB_'+config['COIN'],
-        'lmt': takercount,
-        'ts': servertime
-    }
-    signature = sign(data)
-    data['sig'] = signature
-    response = requests.post(API_HOST + '/api/market/my-order-history', headers=header, data=json_encode(data))
-    new_order_history=json.loads(response.text)
-    if new_order_history['error']!=0:
-        savelog('My history by taker error : '+str(new_order_history['error']))
-    return new_order_history
-def cancel_order():
-    with open('config.json','r') as openfile:
-        config = json.load(openfile)
-    API_HOST = 'https://api.bitkub.com'
-    API_KEY = config['KEY']
-    API_SECRET = bytes(config['SECRET'], encoding= 'utf-8')
-    def json_encode(data):
-        return json.dumps(data, separators=(',', ':'), sort_keys=True)
-    def sign(data):
-        j = json_encode(data)
-        h = hmac.new(API_SECRET, msg=j.encode(), digestmod=hashlib.sha256)
-        return h.hexdigest()
-    response = requests.get(API_HOST + '/api/servertime')
-    servertime = int(response.text)
-    header = {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        'X-BTK-APIKEY': API_KEY
-    }
-    with open('temp.json','r', encoding="utf-8") as openfile:
-        rtemp = json.load(openfile)
-    data = {
-    'hash': rtemp['HASH'],
-    'ts': servertime
-            }
-    signature = sign(data)
-    data['sig'] = signature
-    response = requests.post(API_HOST + '/api/market/cancel-order', headers=header, data=json_encode(data))
-    ex_response=json.loads(response.text)
-    if ex_response['error']==0:
-        temp('')
-        return 1
-    else:
-        savelog('Cancel order error : '+str(ex_response['error']))
-        return 0
-def line(order_no,side,price,thb_amt,profit):
-    try:
-        if config['LINE']==1:  
-            if side=="buy":
-                stickers_open = ['17839','17849','17852','17851','17860','17861','17866','17878']
-                linesticker = random.choice(stickers_open)
-                headers = {'content-type':'application/x-www-form-urlencoded','Authorization':'Bearer '+config['LINETOKEN']}                
-                msg = '\nออเดอร์ที่ : '+str(order_no)+'\nซื้อ : '+config['COIN']+'\nที่ราคา : '+str(price)+' บาท\nจำนวน : '+str(thb_amt)+' บาท'
-                s = requests.post('https://notify-api.line.me/api/notify', headers=headers, data = {"message":msg,"stickerPackageId":"1070","stickerId":linesticker})
-                if s.status_code != 200:
-                    savelog("line send error")
-                    return 0
-                else:
-                    return 1
-            else:
-                stickers_profit = ['17840','17842','17844','17847','17854']
-                stickers_loss = ['17855','17856','17857','17858','17859','17868','17870','17873']
-                if profit>=0:
-                    msg = '\nขาย : '+config['COIN']+'\nออเดอร์ที่ : '+str(order_no)+'\nที่ราคา : '+str(price)+' บาท\nกำไร : '+str(abs(int(profit*10000)/10000))+' บาท'
-                    linesticker = random.choice(stickers_profit)
-                else:
-                    msg = '\nขาย : '+config['COIN']+'\nออเดอร์ที่ : '+str(order_no)+'\nที่ราคา : '+str(price)+' บาท\nขาดทุน : '+str(abs(int(profit*10000)/10000))+' บาท'
-                    linesticker = random.choice(stickers_loss)
-                headers = {'content-type':'application/x-www-form-urlencoded','Authorization':'Bearer '+config['LINETOKEN']}
-                s= requests.post('https://notify-api.line.me/api/notify', headers=headers, data = {"message":msg,"stickerPackageId":"1070","stickerId":linesticker}) 
-                if s.status_code != 200:
-                    savelog("line send error")  
-                    return 0 
-                else:
-                    return 1 
-        else:
-            return 1
-    except Exception as error_is:
-        savelog('line function : '+str(error_is))
-        return 0
-def line_clear(ordercount, price):
-    try:
-        if config['LINE']==1:  
-            stickers_profit = ['17840','17842','17844','17847','17854']
-            msg = '\nเคลียร์ออเดอร์ : '+config['COIN']+'\nจำนวนออเดอร์ : '+str(ordercount)+'\nที่ราคา : '+str(price)+' บาท'
-            linesticker = random.choice(stickers_profit)
-            headers = {'content-type':'application/x-www-form-urlencoded','Authorization':'Bearer '+config['LINETOKEN']}
-            s= requests.post('https://notify-api.line.me/api/notify', headers=headers, data = {"message":msg,"stickerPackageId":"1070","stickerId":linesticker}) 
-            if s.status_code != 200:
-                savelog("line send error")
-                return 0 
-            else:
-                return 1 
-        else:
-            return 1
-    except Exception as error_is:
-        savelog('line clear function : '+str(error_is))
-        return 0
+    print('Websocket : closed')
 def on_message(connect, message):
+    global pid_signature
     try:
-        msg = json.loads(message)
-        ask = msg['lowestAsk']
-        bid = msg['highestBid']
-        askbid_print = 'Ask : '+str(ask)+'\nBid : '+str(bid)
-        bid_better = ((50/100)*(ask-bid))+bid
-    except:
-        raise
-    try:
+        # config
+        config = read_config()
+        if config == 0:
+            time.sleep(botSetup_system_delay)
+            return
+        
+        # credentials สำหรับ bitkub()
+        credentials = {
+            'apiKey': config['KEY'],
+            'secretKey': config['SECRET']
+        }
+        
+        # datetime สำหรับ loop บอท
+        datetime_now = datetime_now = datetime.now(timezone('Asia/Bangkok')).replace(tzinfo=None)
+        
+        ###############################
+        # *** ป้องกันการรันบอทซ้อนกัน *** #
+        ###############################
         try:
-            fopen = open('last_active.txt', 'w', encoding='utf-8')
-            fopen.write(str(datetime.datetime.today()))
-            fopen.close()
+            fileName_last_active_txt = fileName_last_active + '.txt'
+            with open(fileName_last_active_txt, 'r', encoding='utf-8') as read_last_active_txt:
+                read_last_active_txt = read_last_active_txt.read()
+                if read_last_active_txt == '':
+                    last_active_update(datetime_now)
+                    time.sleep(botSetup_pid_threshold)
+                    return
+                else:
+                    ts_last_active_txt = datetime.strptime(read_last_active_txt, '%Y-%m-%d %H:%M:%S.%f').timestamp()
+        except FileNotFoundError:
+            last_active_update(datetime_now)
+            ts_last_active_txt = 0
+            time.sleep(botSetup_pid_threshold)
+        except:
+            ts_last_active_txt = 0
+
+        if pid_signature == None:
+            pid_signature = datetime_now.timestamp()
+            
+        try:
+            with open('BOT_PID_FILE', 'r', encoding='utf-8') as pid_file:
+                pid_file = float(pid_file.read())
+        except FileNotFoundError:
+            with open('BOT_PID_FILE', 'w', encoding='utf-8') as pid_file:
+                pid_file = pid_file.write(str(pid_signature))
+            with open('BOT_PID_FILE', 'r', encoding='utf-8') as pid_file:
+                pid_file = float(pid_file.read())
+
+        if pid_signature != pid_file:
+            if ts_last_active_txt == 0:
+                return
+            elif pid_signature - float(ts_last_active_txt) > botSetup_pid_threshold:
+                with open('BOT_PID_FILE', 'w', encoding='utf-8') as pid_file:
+                    pid_file = pid_file.write(str(pid_signature))
+                    return
+            else:
+                pid_signature = datetime.today().timestamp()
+                print('!!! Running bots repeatedly is not allowed. !!!')
+                time.sleep(botSetup_pid_threshold)
+                return
+        last_active_update(datetime_now)
+        ###############################
+        
+        ###############################
+        # *** แจ้งเตือนบอทหยุดทำงาน *** #
+        ###############################
+        try:
+            if config['LINE'] == 1 and ts_last_active_txt != 0:
+                ts_now = datetime_now.timestamp()
+                #threshold ถ้าเวลาใน last_active file ต่างกับเวลาปัจจุบันเกินค่าที่ตั้งไว้
+                if ts_now - ts_last_active_txt > botSetup_ts_threshold:
+                    str_last_active_txt = datetime.fromtimestamp(ts_last_active_txt).strftime('%d/%m/%y %H:%M:%S')
+                    str_time_now = datetime.fromtimestamp(ts_now).strftime('%d/%m/%y %H:%M:%S')
+                    #LINE send
+                    headers = {'content-type': 'application/x-www-form-urlencoded', 'Authorization': 'Bearer ' + config['LINETOKEN']}                
+                    msg = '\nบอทหยุดทำงาน\nเมื่อ : ' + str_last_active_txt + '\nกลับมาทำงานเมื่อ : ' + str_time_now
+                    requests.post('https://notify-api.line.me/api/notify', headers=headers, data = {'message': msg})
         except Exception as error_is:
-            savelog('บันทึกวันเวลาที่ใช้งานบอทล่าสุดใส่ last_active.txt ไม่ได้')
-        with open('config.json','r') as openfile:
-            config = json.load(openfile)
-        with open('temp.json','r') as openfile:
-            rtemp = json.load(openfile)
-        dbcon = sqlite3.connect('Bitkub-SYY.db')
-        dbcursor = dbcon.cursor()
-        dbcursor.execute("create table if not exists orders(id integer primary key, hash text, rate float, thb_amt float, coin_amt float, fee_amt float)")
-        dbcursor.execute("create table if not exists sold(id integer primary key, rate_buy float, rate_sell float, total_profit float)")
+            print('check_bot_stop : '+str(error_is))
+            log('check_bot_stop : '+str(error_is))
+            time.sleep(botSetup_system_delay)
+            return
+        ###############################
+        
+        ##############################
+        # *** LINE แจ้งเตือนออเดอร์ *** #
+        ##############################
+        def line(order_no, side, price, base_amt, profit, ordercount):
+            try:
+                if config['LINE'] == 1:  
+                    stickers_open = ['17839', '17849', '17852', '17851', '17860', '17861', '17866', '17878']
+                    stickers_profit = ['17840', '17842', '17844', '17847', '17854']
+                    stickers_loss = ['17855', '17856', '17857', '17858', '17859', '17868', '17870', '17873']
+                    if side == 'buy':
+                        linesticker = random.choice(stickers_open)
+                        headers = {'content-type': 'application/x-www-form-urlencoded', 'Authorization': 'Bearer ' + config['LINETOKEN']}                
+                        msg = '\nออเดอร์ที่ : ' + str(order_no) + '\nซื้อ : ' + config['COIN'] + '\nที่ราคา : ' + str(price) + ' บาท' + '\nจำนวน : ' + number_truncate(base_amt, botSetup_decimal_thb) + ' บาท'
+                        s = requests.post('https://notify-api.line.me/api/notify', headers=headers, data = {'message': msg, 'stickerPackageId': '1070', 'stickerId': linesticker})
+                        if s.status_code != 200:
+                            log('!!! line send error !!!')
+                            print('!!! line send error !!!')
+                    elif side == 'sell_profit':
+                        if profit >= 0:
+                            msg = '\nขาย : ' + config['COIN'] + '\nออเดอร์ที่ : ' + str(order_no) + '\nที่ราคา : ' + str(price) + ' บาท' + '\nกำไร : ' + number_truncate(profit, botSetup_decimal_thb) + ' บาท'
+                            linesticker = random.choice(stickers_profit)
+                        else:
+                            msg = '\nขาย : ' + config['COIN'] + '\nออเดอร์ที่ : ' + str(order_no) + '\nที่ราคา : ' + str(price) + ' บาท' + '\nขาดทุน : ' + number_truncate(profit, botSetup_decimal_thb) + ' บาท'
+                            linesticker = random.choice(stickers_loss)
+                        headers = {'content-type':'application/x-www-form-urlencoded','Authorization':'Bearer '+config['LINETOKEN']}
+                        s= requests.post('https://notify-api.line.me/api/notify', headers=headers, data = {'message': msg, 'stickerPackageId': '1070', 'stickerId':linesticker}) 
+                        if s.status_code != 200:
+                            log('!!! line send error !!!')
+                            print('!!! line send error !!!') 
+                    elif side == 'sell_dca':
+                        if profit >= 0:
+                            msg = '\nขาย : ' + config['COIN'] + '\nออเดอร์ที่ : ' + str(order_no) + '\nที่ราคา : ' + str(price) + ' บาท'
+                            linesticker = random.choice(stickers_profit)
+                        else:
+                            msg = '\nขาย : ' + config['COIN'] + '\nออเดอร์ที่ : ' + str(order_no) + '\nที่ราคา : ' + str(price) + ' บาท'
+                            linesticker = random.choice(stickers_loss)
+                        headers = {'content-type': 'application/x-www-form-urlencoded', 'Authorization': 'Bearer ' + config['LINETOKEN']}
+                        s= requests.post('https://notify-api.line.me/api/notify', headers=headers, data = {'message': msg, 'stickerPackageId': '1070', 'stickerId': linesticker}) 
+                        if s.status_code != 200:
+                            log('!!! line send error !!!')
+                            print('!!! line send error !!!')
+                    elif side == 'sell_clear': 
+                        msg = '\nเคลียร์ออเดอร์ : ' + config['COIN'] + '\nจำนวนออเดอร์ : ' + str(ordercount) + '\nที่ราคา : ' + str(price) + ' บาท' + '\nกำไรจากการเคลียร์ : ' + number_truncate(profit, botSetup_decimal_thb)+' บาท'
+                        linesticker = random.choice(stickers_profit)
+                        headers = {'content-type': 'application/x-www-form-urlencoded', 'Authorization': 'Bearer '+ config['LINETOKEN']}
+                        s= requests.post('https://notify-api.line.me/api/notify', headers=headers, data = {'message': msg, 'stickerPackageId': '1070', 'stickerId': linesticker}) 
+                        if s.status_code != 200:
+                            log('!!! line send error !!!')
+                            print('!!! line send error !!!')
+            except Exception as error_is:
+                log('line function error : '+str(error_is))
+                print('!!! line function error !!!')
+        ##############################
+        
+        ##############################
+        # *** ระบบฐานข้อมูลของบอท *** #
+        ##############################
+        try:
+            dbcon = sqlite3.connect(fileName_database +'.db')
+            dbcursor = dbcon.cursor()
+            dbcursor.execute('create table if not exists orders(id integer primary key, rate real, base_amt real, coin_amt real, fee_amt real, pricerange integer, ts integer)')
+            dbcursor.execute('create table if not exists sold(id integer primary key, total_profit real)')
+        except Exception as error_is:
+            log('database : ' + str(error_is))
+            print('database : ' + str(error_is))
+            time.sleep(botSetup_system_delay)
+            return
+        ##############################
+
+        # ฟังก์ชั่นเรียกดูจำนวนออเดอร์ เพราะมีการเรียกหลายรอบใน operate()
+        def fetch_db_ordercount():
+            dbcursor.execute('select * from orders')
+            db_res = dbcursor.fetchall()
+            return len(db_res)
+        db_ordercount = fetch_db_ordercount()
+        try:
+            if db_ordercount > 0:
+                dbcursor.execute('select ts from orders where id=(select min(id) from orders)')
+                db_res = dbcursor.fetchone()
+                db_firstorder_ts = db_res[0] # timestamp ออเดอร์แรก
+                dbcursor.execute('select rate from orders where id=(select max(id) from orders)')
+                db_res = dbcursor.fetchone()
+                db_lastorder_price = db_res[0] # เรทของออเดอร์ล่าสุด(ราคาที่ต่ำที่สุด)
+                dbcursor.execute('select coin_amt from orders where id=(select max(id) from orders)')
+                db_res = dbcursor.fetchone()
+                db_lastorder_coin_amt = db_res[0] # จำนวนโทเคนของออเดอร์ล่าสุด
+                dbcursor.execute('select base_amt from orders where id=(select max(id) from orders)')
+                db_res = dbcursor.fetchone()
+                db_lastorder_base_amt = db_res[0] # จำนวน base ของออเดอร์ล่าสุด
+                dbcursor.execute('select max(pricerange) from orders')
+                db_res = dbcursor.fetchone()
+                db_pricerange = db_res[0] # pricerange จากออเดอร์แรก
+                dbcursor.execute('select base_amt from orders where id=(select min(id) from orders)')
+                db_res = dbcursor.fetchone()
+                db_firstorder_cost = db_res[0] # cost ออเดอร์แรก
+                dbcursor.execute('select sum(base_amt) from orders')
+                db_res = dbcursor.fetchone()
+                db_total_base = db_res[0] # ผลรวม total base
+                dbcursor.execute('select sum(coin_amt) from orders')
+                db_res = dbcursor.fetchone()
+                db_total_coin = db_res[0] #ผลรวม total coin
+                dbcursor.execute('select sum(fee_amt) from orders')
+                db_res = dbcursor.fetchone()
+                db_total_fee = db_res[0] # ผลรวม total fee
+                dbcursor.execute('select sum(total_profit) from sold')
+                db_res = dbcursor.fetchone()
+                db_sold_total_profit = db_res[0] # ผลรวม total profit จาก sold
+                if db_sold_total_profit == None:
+                    db_sold_total_profit = 0
+                if db_ordercount > 1:
+                    dbcursor.execute('select rate from orders where id=(select max(?) from orders)',(db_ordercount - 1,))
+                    db_res = dbcursor.fetchone()
+                    db_dca_sell_price = db_res[0] # เรทของออเดอร์รองล่าสุด
+                else:
+                    db_dca_sell_price = 0
+            else:
+                db_firstorder_ts = 0
+                db_lastorder_price = 0
+                db_lastorder_coin_amt = 0
+                db_lastorder_base_amt = 0
+                db_pricerange = 0
+                db_firstorder_cost = 0
+                db_total_base = 0
+                db_total_coin = 0
+                db_total_fee = 0
+                db_sold_total_profit = 0
+                db_dca_sell_price = 0
+        except Exception as error_is:
+            log('database orders : ' + str(error_is))
+            print('database orders : ' + str(error_is))
+            return
+
+        # Break-even
+        if db_ordercount > 0:
+            break_even = (((((db_total_fee / db_total_base) * 100) * 2) / 100) * ((db_total_base - db_sold_total_profit) / db_total_coin)) + ((db_total_base - db_sold_total_profit) / db_total_coin)
+        else:
+            break_even = None
+             
+        # Ask, Bid
+        try:
+            msg = json.loads(message)
+            ask = msg['lowestAsk']
+            ask_size_coin = msg['lowestAskSize']
+            ask_size_thb = ask_size_coin * ask
+            bid = msg['highestBid']
+            bid_size_coin = msg['highestBidSize']
+        except Exception as error:
+            return
+        
+        # circle period
+        try:
+            if db_firstorder_ts != 0:
+                date_time_first_order = datetime.fromtimestamp(db_firstorder_ts)
+                current_timestamp = datetime.timestamp(datetime_now)
+                date_time_current = datetime.fromtimestamp(current_timestamp)
+                time_diff = date_time_current - date_time_first_order
+                years = time_diff.days // 365
+                if years > 0:
+                    months = time_diff.days % 365 // 30
+                else:
+                    months = (time_diff.days % 365 // 30) if (time_diff.days % 365 // 30) > 0 else 0
+                days = time_diff.days % 365 % 30
+                hours = time_diff.seconds // 3600
+                minutes = (time_diff.seconds % 3600) // 60
+                seconds = time_diff.seconds % 60
+                time_components = []
+                if years > 0:
+                    time_components.append(f'{years} years')
+                if months > 0:
+                    time_components.append(f'{months} months')
+                if days > 0:
+                    time_components.append(f'{days} days')
+                if hours > 0:
+                    time_components.append(f'{hours} hours')
+                if minutes > 0:
+                    time_components.append(f'{minutes} minutes')
+                if seconds > 0:
+                    time_components.append(f'{seconds} seconds')
+                time_diff_str = ', '.join(time_components)
+                circle_period = time_diff_str
+            else:
+                circle_period = None
+        except Exception as error_is:
+            log('circle_period : ' + str(error_is))
+            print('circle_period : ' + str(error_is))
+            return
+        
+        ################
+        # *** เทรด *** #
+        ################
+        def buy(ordersize, cmd): # cmd 1 -> buy first order, 2 -> buy DCA
+            reqBody = {
+                'sym': config['COIN'].lower() + '_thb',
+                'amt': ordersize,
+                'rat': ask,
+                'typ': 'limit'
+            }
+            cmd_send = bitkub('POST', '/api/v3/market/place-bid', reqBody, credentials)
+   
+            if cmd_send['error'] != 0:
+                print('buy() : Bitkub error code = ' + str(cmd_send['error']))
+                time.sleep(botSetup_system_delay)
+                return 0
+            else:
+                temp_write(cmd_send['result']['hash'], cmd, cmd_send)
+                return 1
+
+        def sell(ordersize, cmd): # cmd 3 -> sell profit, 4 -> sell dca, 5 -> sell clear
+            reqBody = {
+                'sym': config['COIN'].lower() + '_thb',
+                'amt': ordersize,
+                'rat': bid,
+                'typ': 'limit'
+            }   
+            cmd_send = bitkub('POST', '/api/v3/market/place-ask', reqBody, credentials)
+            
+            if cmd_send['error'] != 0:
+                print('sell() : Bitkub error code = ' + str(cmd_send['error']))
+                time.sleep(botSetup_system_delay)
+                return 0
+            else:
+                temp_write(cmd_send['result']['hash'], cmd, cmd_send)
+                return 1
+            
+        def order_operate():
+            temp = temp_read()
+            if temp['HASH'] == '':
+                return 0
+            else:
+                reqBody = {
+                    'sym': config['COIN'].lower() + '_thb',
+                    'hash': temp['HASH'],
+                }
+                order_info = bitkub('GET', '/api/v3/market/order-info', reqBody, credentials)['result']
+                
+                print('Order ' + temp['HASH'] + ' Filling')
+                while order_info['status'] not in ['filled', 'cancelled']:
+                    order_info = bitkub('GET', '/api/v3/market/order-info', reqBody, credentials)['result']
+                
+                if order_info['status'] == 'cancelled':
+                    temp_write('', 0, '')
+                    return 1
+                
+                if temp['cmd'] == 1:
+                    pricerange = ask / config['MAX_ORDER'] # คำนวณ pricerage
+                    temp_for_order = temp_read()['detail']['result']
+                    dbcursor.execute('insert into orders (rate, base_amt, coin_amt, fee_amt, pricerange, ts)values(?, ?, ?, ?, ?, ?)',(temp_for_order['rat'], temp_for_order['amt'], temp_for_order['rec'], temp_for_order['fee'], pricerange, temp_for_order['ts']))
+                    dbcon.commit()
+                    print(f'-- BUY first order filled ({temp["HASH"]}) --')
+                    temp_write('', 0, '')
+                    db_ordercount = fetch_db_ordercount()
+                    print(f'> OrderCount ({db_ordercount}/{config["MAX_ORDER"]})')
+                    stat_add_circle_total()
+                    orders_verbose('buy', db_ordercount, order_info)
+                    line(db_ordercount, 'buy', order_info['rate'], temp_for_order['amt'], 0, 0)
+                elif temp['cmd'] == 2:
+                    temp_for_order = temp_read()['detail']['result']
+                    dbcursor.execute('insert into orders (rate, base_amt, coin_amt, fee_amt, pricerange, ts)values(?, ?, ?, ?, ?, ?)',(temp_for_order['rat'], temp_for_order['amt'], temp_for_order['rec'], temp_for_order['fee'], 0, temp_for_order['ts']))
+                    dbcon.commit()
+                    print(f'-- BUY DCA order filled ({temp["HASH"]}) --')
+                    temp_write('', 0, '')
+                    db_ordercount = fetch_db_ordercount()
+                    print(f'> OrderCount ({db_ordercount}/{config["MAX_ORDER"]})')
+                    orders_verbose('buy DCA', db_ordercount, order_info)
+                    line(db_ordercount, 'buy', order_info['rate'], temp_for_order['amt'], 0, 0)
+                elif temp['cmd'] == 3:
+                    temp_for_order = temp_read()['detail']['result']
+                    order_profit = temp_for_order['rec'] - db_total_base
+                    db_ordercount = fetch_db_ordercount()
+                    dbcursor.execute('delete from orders where id=?',(db_ordercount,))
+                    dbcon.commit()
+                    print(f'-- SELL order filled ({temp["HASH"]}) --')
+                    temp_write('', 0, '')
+                    db_ordercount = fetch_db_ordercount()
+                    stat_add_profit_total(order_profit)
+                    orders_verbose('sell', db_ordercount + 1, order_info)
+                    line(db_ordercount + 1, 'sell_profit', order_info['rate'], 0, order_profit, 0)
+                elif temp['cmd'] == 4:
+                    temp_for_order = temp_read()['detail']['result']
+                    order_profit = temp_for_order['rec'] - db_lastorder_base_amt
+                    db_ordercount = fetch_db_ordercount()
+                    dbcursor.execute('delete from orders where id=?',(db_ordercount,))
+                    dbcursor.execute('insert into sold (total_profit)values(?)',(order_profit,))
+                    dbcon.commit()
+                    print(f'-- SELL DCA order filled ({temp["HASH"]}) --')
+                    temp_write('', 0, '')
+                    db_ordercount = fetch_db_ordercount()
+                    print(f'> OrderCount ({db_ordercount}/{config["MAX_ORDER"]})')
+                    orders_verbose('sell dca', db_ordercount + 1, order_info)
+                    line(db_ordercount + 1, 'sell_dca', order_info['rate'], 0, 0, 0)
+                elif temp['cmd'] == 5:
+                    temp_for_order = temp_read()['detail']['result']
+                    order_profit = temp_for_order['rec'] - (db_total_base - db_sold_total_profit)
+                    db_ordercount = fetch_db_ordercount()
+                    dbcursor.execute('delete from sold')
+                    dbcursor.execute('delete from orders')
+                    dbcon.commit()
+                    print(f'-- SELL Clear order filled ({temp["HASH"]}) --')
+                    temp_write('', 0, '')
+                    stat_add_profit_total(order_profit)
+                    orders_verbose('sell clear', db_ordercount, order_info)
+                    line(0, 'sell_clear', order_info['rate'], 0, order_profit, db_ordercount)
+                return 1
+                
+        # $$$$$$$$$$$$$$$$$$$$$$$ #
+        # $$$$$$ Condition $$$$$$ #
+        # $$$$$$$$$$$$$$$$$$$$$$$ #
+        
+        # เช็คว่ามี hash ค้างไหม ถ้ามีแล้วถูก operate ให้ return
+        if order_operate() == 1:
+            return
+        
+        # ฟังก์ชั่นโชว์ข้อความบน console ในกรณี skip การส่งคำสั่ง
+        def show_skip_text():
+            print('> Skip for safe filling')
+        
+        if db_ordercount < 1: # ถ้าไม่มีออเดอร์ในหน้าตัก
+            # เช็คว่า config อนุญาตไหม (stopnextcircle = 0 หรือเปล่า)
+            if config['STOPNEXTCIRCLE'] != 0:
+                print('STOPNEXTCIRCLE != 0')
+                return
+            # คำนวณ order size
+            try:
+                if config['ALL_IN'] == 0:
+                    ordersize = config['ORDER_SIZE']
+                else:
+                    reqBody = {
+                    }
+                    balances = bitkub('POST', '/api/v3/market/balances', reqBody, credentials)['result']
+                    balance_thb = balances['THB']['available']
+                    ordersize = balance_thb / config['MAX_ORDER']
+            except Exception as error_is:
+                log('ordersize cal : ' + str(error_is))
+                print('ordersize cal : ' + str(error_is))
+                return
+            # ส่งคำสั่งซื้อออเดอร์แรก ถ้าส่งคำสั่งสำเร็จให้ return
+            if ask_size_thb > ordersize:
+                if buy(ordersize, 1) == 1:
+                    return
+            else:
+                show_skip_text()
+                return
+        else: # ถ้ามีออเดอร์ในหน้าตัก
+            if db_ordercount == 1: # ถ้ามีแค่ 1 ออเดอร์
+                if bid > db_lastorder_price + db_pricerange: # sell profit
+                    if bid_size_coin > db_total_coin:
+                        if sell(db_total_coin, 3) == 1:
+                            return
+                    else:
+                        show_skip_text()
+                        return
+            else: # ถ้ามี 2 ออเดอร์ขึ้นไป
+                if bid >= break_even: # sell clear
+                    if bid_size_coin > db_total_coin:
+                        if sell(db_total_coin, 5) == 1:
+                            return
+                        else:
+                            show_skip_text()
+                            return
+                elif bid >= db_dca_sell_price: # sell dca
+                    if bid_size_coin > db_lastorder_coin_amt:
+                        if sell(db_lastorder_coin_amt, 4) == 1:
+                            return
+                    else:
+                        show_skip_text()
+                        return
+                else:
+                    if ask < db_lastorder_price - db_pricerange: # buy dca
+                        if db_ordercount < config['MAX_ORDER']:
+                            if ask_size_thb > db_firstorder_cost:
+                                if buy(db_firstorder_cost, 2) == 1:
+                                    return
+                            else:
+                                show_skip_text()
+                                return
+            
+        #$$$$$$$$$$$$$$$$$$$$$$$$$$
+        #   โชว์สถิติและข้อมูลออเดอร์   #
+        #$$$$$$$$$$$$$$$$$$$$$$$$$$
+        
+        # price table
+        header = [' Symbol ', Back.RED + Fore.WHITE + Style.BRIGHT + ' Ask ' + Style.RESET_ALL, Back.GREEN + Fore.WHITE + Style.BRIGHT + ' Bid ' + Style.RESET_ALL, Back.YELLOW + Style.BRIGHT + ' Break-Even ' + Style.RESET_ALL + Style.RESET_ALL, ' Price Range ']
+
+        # distance last order price
+        if bid > db_lastorder_price:
+            distance_lastorder = ((bid - db_lastorder_price) / db_lastorder_price) * 100
+            distance_lastorder = Style.BRIGHT + 'DistanceLastOrder' + Style.RESET_ALL + ' : ' + number_truncate(distance_lastorder, 4) + ' % ( ' + number_truncate(bid - db_lastorder_price, botSetup_decimal_coin) + ' ฿ )\n'
+        elif bid < db_lastorder_price:
+            distance_lastorder = ((db_lastorder_price - ask) / db_lastorder_price) * 100
+            distance_lastorder = Style.BRIGHT + 'DistanceLastOrder' + Style.RESET_ALL + ' : ' + number_truncate(distance_lastorder * -1, 4) + ' % ( ' + number_truncate((db_lastorder_price - ask) * -1, botSetup_decimal_coin) + ' ฿ )\n'
+        else:
+            distance_lastorder = ''
+
+        # price range show
+        pricerange_show = db_pricerange
+
+        pricerange_show = number_truncate(pricerange_show, botSetup_decimal_coin)
+
+        data = [[config['COIN'] + '/THB', str(ask) + ' ฿', str(bid) + ' ฿', number_truncate(break_even, botSetup_decimal_coin) + ' ฿', pricerange_show + ' ฿']]
+        price_table_show = termtables.to_string(
+            data,
+            header=header,
+            style=termtables.styles.rounded_thick
+        )
+        # orders table
         dbcursor.execute('select * from orders')
         db_res = dbcursor.fetchall()
-        db_ordercount = len(db_res)
-        db_show = ""
-        if db_ordercount > 0:
-            coin_total = 0
-            thb_total = 0
-            fee_total = 0
-            db_show += '\n'
-            for x in db_res:
-                db_show += str(x[0])+' -- '+str(x[2])+' -- '+str(x[1])+'\n'
-                coin_total += x[4]
-                thb_total += x[3]
-                fee_total += x[5]
-            dbcursor.execute('select * from sold')
-            db_sold_res = dbcursor.fetchall()
-            db__sold_ordercount = len(db_sold_res)
-            sold_profit_total = 0
-            if db__sold_ordercount > 0:
-                for x in db_sold_res:
-                    sold_profit_total += x[3]
-            break_even = (((((fee_total/thb_total)*100)*2)/100)*((thb_total-sold_profit_total)/coin_total))+((thb_total-sold_profit_total)/coin_total)
-            db_show += 'Break-even : '+str(break_even)
-            db_show += '\n\n'
+        
+         #ordercount for show
+        if db_ordercount < config['MAX_ORDER']:
+            order_table_order_count = Style.BRIGHT + 'OrderCount' + Style.RESET_ALL + ' : ' + str(len(db_res)) + '/' + str(config['MAX_ORDER'])
         else:
-            db_show += '\n'
-            db_show += '-- No Order --'
-            db_show += '\n\n'
-        condition_print = ""
-        if rtemp['HASH'] == "":
-            if db_ordercount == 0:
-                if config['STOPNEXTCIRCLE'] != 0:
-                    condition_print += "zZZ"
-                else:
-                    cmd = send_buy_order(bid_better, config['ORDERSIZE'])
-                    if cmd == 1:
-                        condition_print += "buy order sent :-)"
-                    else:
-                        condition_print += "buy order error T_T"
-            else:
-                if ask-((ask-bid)/2)>break_even and config['CLEAR_EVERY_BE']==1 and db_ordercount>=config['CLEAR_ORDER_COUNT']:
-                    dbcursor.execute('select * from orders')
-                    db_all_order = dbcursor.fetchall()
-                    db_sum_coin_amt = 0
-                    for x in db_all_order:
-                        db_sum_coin_amt += x[4]
-                    cmd = send_sell_order_clear(ask-((ask-bid)/2), db_sum_coin_amt)
-                    if cmd == 1:
-                        condition_print += "clear sell order sent :-)"
-                    else:
-                        condition_print += "clear sell order error T_T"
-                else:
-                    dbcursor.execute('select * from orders where id=?',(db_ordercount,))
-                    db_last_order = dbcursor.fetchall()
-                    minimum_price_to_sell = (((((db_last_order[0][5]/db_last_order[0][3])*100)*2)/100)*db_last_order[0][2])+db_last_order[0][2]
-                    if db_last_order[0][2]+config['PRICERANGE']<minimum_price_to_sell:
-                        if db_ordercount == 1:
-                            price_to_sell = break_even
-                        else:
-                            price_to_sell = minimum_price_to_sell
-                    else:
-                        price_to_sell = db_last_order[0][2]+config['PRICERANGE']
-                    if bid<=db_last_order[0][2]-config['PRICERANGE']:
-                        if db_ordercount<config['MAX_ORDER']:
-                            cmd = send_buy_order(bid, db_last_order[0][3])
-                            if cmd == 1:
-                                condition_print += "DCA buy order sent :-)"
-                            else:
-                                condition_print += "DCA buy order error T_T"
-                        else:
-                            if ask>db_last_order[0][2]:
-                                condition_print += 'wait price to '+str(price_to_sell)
-                            elif bid<db_last_order[0][2]:
-                                if config['MAX_ORDER']>1:
-                                    condition_print += 'DCA wait price to '+str(db_last_order[0][2]-config['PRICERANGE'])
-                                else:
-                                    condition_print += 'wait price to '+str(price_to_sell)
-                            else:
-                                condition_print += "wait! wait! wait!"
-                            condition_print += ", OrderCount ("+str(db_ordercount)+"/"+str(config['MAX_ORDER'])+")"
-                    elif ask>price_to_sell:
-                        cmd = send_sell_order(ask, db_last_order[0][4])
-                        if cmd == 1:
-                            if db_ordercount == 1:
-                                condition_print += "sell order sent :-)"
-                            else:
-                                condition_print += "DCA sell order sent :-)"
-                        else:
-                            if db_ordercount == 1:
-                                condition_print += "sell order error T_T"
-                            else:
-                                condition_print += "DCA sell order error T_T"
-                    else:
-                        if ask>db_last_order[0][2]:
-                            if break_even<=price_to_sell and config['CLEAR_EVERY_BE']==1 and db_ordercount>=config['CLEAR_ORDER_COUNT']:
-                                condition_print += 'wait price to '+str(break_even)+', to clear'
-                            else:
-                                condition_print += 'wait price to '+str(price_to_sell)
-                        elif bid<db_last_order[0][2]:
-                            if db_ordercount<config['MAX_ORDER']:
-                                condition_print += 'DCA wait price to '+str(db_last_order[0][2]-config['PRICERANGE'])
-                        else:
-                            condition_print += "wait! wait! wait!"               
+            order_table_order_count = Style.BRIGHT + 'OrderCount' + Style.RESET_ALL + ' : ' + Back.RED + Fore.WHITE + Style.BRIGHT + ' ' + str(len(db_res)) + '/' + str(config['MAX_ORDER']) + ' ' + Style.RESET_ALL
+            
+        order_table_circle_period = Style.BRIGHT + 'Circle Period' + Style.RESET_ALL + ' : ' + circle_period
+
+        header = [Back.WHITE + Fore.BLACK + Style.BRIGHT + ' No. ' + Style.RESET_ALL, Back.WHITE + Fore.BLACK + Style.BRIGHT + ' Rate ' + Style.RESET_ALL, Back.WHITE + Fore.BLACK + Style.BRIGHT + ' Cost ' + Style.RESET_ALL, Back.WHITE + Fore.BLACK + Style.BRIGHT + ' Amount ' + Style.RESET_ALL, Back.WHITE + Fore.BLACK + Style.BRIGHT + ' Fee ' + Style.RESET_ALL]
+        data = []
+        for row in db_res:
+            data.append((row[0], str(row[1]) + ' ฿', number_truncate(row[2], botSetup_decimal_thb) + ' ฿', number_truncate(row[3], botSetup_decimal_coin), str(row[4]) + ' ฿'))
+
+        orders_table_show = termtables.to_string(
+            data,
+            header=header,
+            style=termtables.styles.rounded_thick
+        )
+
+        header = []
+        stats = stat_read()
+        if stats['profit_total'] == 0:
+            header.append(Back.BLUE+Fore.WHITE + Style.BRIGHT + ' Profit Total ' + Style.RESET_ALL)
+        elif stats['profit_total']>0:
+            header.append(Back.GREEN+Fore.WHITE + Style.BRIGHT + ' Profit Total ' + Style.RESET_ALL)
         else:
-            info_order = order_info()
-            if info_order['result']['side'] == 'buy':
-                if info_order['result']['status'] == 'filled':
-                    order_history_count = len(info_order['result']['history'])
-                    history_by_taker = my_history_by_taker(order_history_count)
-                    order_thb_amount = 0
-                    order_coin_amount = 0
-                    order_fee_amount = 0
-                    for x in info_order['result']['history']:
-                        order_thb_amount += x['amount']
-                    for x in history_by_taker['result']:
-                        order_coin_amount += x['amount']
-                    for x in info_order['result']['history']:
-                        order_fee_amount += x['fee']
-                    dbcursor.execute('insert into orders (hash,rate,thb_amt,coin_amt,fee_amt)values(?,?,?,?,?)',(rtemp['HASH'],info_order['result']['rate'],order_thb_amount,order_coin_amount,order_fee_amount))
-                    dbcon.commit()
-                    condition_print += 'Buy Filled'
-                    temp('')
-                    line(db_ordercount+1,"buy",info_order['result']['rate'],order_thb_amount,0)
-                elif info_order['result']['status'] == 'cancelled':
-                    temp_clear()
-                    condition_print += 'buy order cancelled by user (*_*)'
-                else:
-                    if bid > info_order['result']['rate']:
-                        cmd = cancel_order()
-                        if cmd == 1:
-                            condition_print += 'buy order cancelled!'
-                        else:
-                            condition_print += 'cancel buy order error (O_O\')'
-                    else:
-                        condition_print += 'buy limit at '+str(info_order['result']['rate'])+', '
-                        condition_print += 'wait for fill buy (O_O)'
-            else:
-                info_order = order_info()
-                if rtemp['CLEAR'] == 1:
-                    dbcursor.execute('select * from orders')
-                    db_all_order = dbcursor.fetchall()
-                    thb_all_amt = 0
-                    for x in db_all_order:
-                        thb_all_amt += x[3]
-                    if info_order['result']['status'] == 'filled':
-                        order_history_count = len(info_order['result']['history'])
-                        history_by_taker = my_history_by_taker(order_history_count)
-                        order_coin_amount = 0
-                        order_fee_amount = 0
-                        for x in history_by_taker['result']:
-                            order_coin_amount += x['amount']
-                        for x in info_order['result']['history']:
-                            order_fee_amount += x['fee']
-                        thb_amt_pay = thb_all_amt
-                        thb_amt_rec = order_coin_amount*info_order['result']['rate']
-                        profit_with_fee = (thb_amt_rec-thb_amt_pay)-order_fee_amount
-                        dbcursor.execute('delete from sold')
-                        dbcon.commit()
-                        dbcursor.execute('delete from orders')
-                        dbcon.commit()
-                        temp_clear()
-                        line_clear(db_ordercount,info_order['result']['rate'])
-                    elif ask < info_order['result']['rate']:
-                            cmd = cancel_order()
-                            if cmd == 1:
-                                condition_print += 'clear sell order cancelled!'
-                            else:
-                                condition_print += 'cancel clear sell order error (O_O\')'
-                    elif info_order['result']['status'] == 'cancelled':
-                        temp_clear()
-                        condition_print += 'sell order cancelled by user (*_*)'
-                    else:
-                        condition_print += 'sell litmit at '+str(info_order['result']['rate'])+', '
-                        condition_print += 'wait for fill sell (clear)'
-                else:
-                    dbcursor.execute('select * from orders where id=?',(db_ordercount,))
-                    db_last_order = dbcursor.fetchall()
-                    if info_order['result']['status'] == 'filled':
-                        order_history_count = len(info_order['result']['history'])
-                        history_by_taker = my_history_by_taker(order_history_count)
-                        order_coin_amount = 0
-                        order_fee_amount = 0
-                        for x in history_by_taker['result']:
-                            order_coin_amount += x['amount']
-                        for x in info_order['result']['history']:
-                            order_fee_amount += x['fee']
-                        thb_amt_pay = db_last_order[0][3]
-                        thb_amt_rec = order_coin_amount*info_order['result']['rate']
-                        profit_with_fee = (thb_amt_rec-thb_amt_pay)-order_fee_amount
-                        dbcursor.execute('insert into sold (rate_buy,rate_sell,total_profit)values(?,?,?)',(db_last_order[0][2],info_order['result']['rate'],profit_with_fee))
-                        dbcon.commit()
-                        line(db_ordercount,"sell",info_order['result']['rate'],0,profit_with_fee)
-                        dbcursor.execute('delete from orders where id=?',(db_ordercount,))
-                        dbcon.commit()
-                        condition_print += 'sell order filled'
-                        temp('')
-                        if db_ordercount == 1:
-                            dbcursor.execute('delete from sold')
-                            dbcon.commit()
-                    elif info_order['result']['status'] == 'cancelled':
-                        temp_clear()
-                    else:
-                        if ask < info_order['result']['rate']:
-                            cmd = cancel_order()
-                            if cmd == 1:
-                                condition_print += 'sell order cancelled!'
-                            else:
-                                condition_print += 'cancel sell order error (O_O\')'
-                        else:
-                            condition_print += 'sell litmit at '+str(info_order['result']['rate'])+', '
-                            condition_print += 'wait for fill sell'
-        top = '#################################\n'
-        top += ' BOTTAR SYY at Bitkub(Websocket)\n'
-        top += '#################################'
-        print('\n|\n|\n'+str(datetime.datetime.now())+'\n'+top+'\n'+db_show+'>> '+config['COIN'].upper()+' <<\n'+askbid_print+'\n\n'+'Bot Status : '+condition_print+'\n')
-    except Exception as error_is:
-        savelog('ข้อผิดพลาด processing : '+str(error_is))
-if __name__ == "__main__":
+            header.append(Back.RED + Fore.WHITE + Style.BRIGHT + ' Profit Total ' + Style.RESET_ALL)
+        header.append(Back.MAGENTA + Fore.WHITE + Style.BRIGHT + ' Circle Total ' + Style.RESET_ALL)
+
+        # check profit total
+        if stats['profit_total'] == 0:
+            profit_total_show = 0.0
+        else:
+            profit_total_show = number_truncate(stats['profit_total'], botSetup_decimal_thb)
+            
+        data = [[profit_total_show, stats['circle_total']]]
+        stats_table_show = termtables.to_string(
+            data,
+            header=header,
+            style=termtables.styles.rounded_thick
+        )
+
+        top = '|' + '\n' + '|' + '\n' + '|' + '\n' + '|' + '\n' + '|' + '\n' + '|' + '\n'  
+        top += '▀█▀ █ █▀▄ █░░ █▀█ █▀█ █▀▄\n'
+        top += '░█░ █ █▄▀ █▄▄ █▄█ █▀▄ █▄▀'
+        top += '\n' + Style.BRIGHT + bot_title + Style.RESET_ALL + '\n'
+        loop_time = str(datetime_now.strftime('%Y-%m-%d %H:%M:%S'))
+        top += '# ' + loop_time + '\n'
+        print(top + price_table_show + '\n' + distance_lastorder + order_table_order_count + '\n' + order_table_circle_period + '\n' + orders_table_show + '\n'+stats_table_show + '\n')
+        #$$$$$$$$$$$$$$$$$$$$$$$$$$ 
+            
+    except Exception as error:
+        print('Websocket : ' + str(error))
+    
+if __name__ == '__main__':
     while True:
         try:
-            dbcon = sqlite3.connect('Bitkub-SYY.db')
-            dbcursor = dbcon.cursor()
-            dbcursor.execute("create table if not exists orders(id integer primary key, hash text, rate float, thb_amt float, coin_amt float, fee_amt float)")
-            dbcursor.execute("create table if not exists sold(id integer primary key, rate_buy float, rate_sell float, total_profit float)")
-            dbcon.close()
-            with open('config.json','r') as openfile:
-                config = json.load(openfile)
-            socket = "wss://api.bitkub.com/websocket-api/market.ticker.thb_"+config['COIN'].lower()
-            connect = websocket.WebSocketApp(socket, on_message=on_message, on_close=on_close)
-            connect.run_forever()
-        except Exception as error_is:
-            savelog('ข้อผิดพลาด core : '+str(error_is))
+            config = read_config()
+            if config == 0:
+                time.sleep(botSetup_system_delay)
+                continue
+
+            credentials = {
+                'apiKey': '',
+                'secretKey': ''
+            }
+            bitkub_symbols = bitkub('GET', '/api/market/symbols', {}, credentials)
+            found = any(item['symbol'] == 'THB_' + config['COIN'].upper() for item in bitkub_symbols['result'])
+            if found:
+                socket = 'wss://api.bitkub.com/websocket-api/market.ticker.thb_' + config['COIN'].lower()
+                connect = websocket.WebSocketApp(socket, on_message=on_message, on_close=on_close)
+                connect.run_forever()
+            else:
+                print('!!! ' + config['COIN'].upper() + ' was not found in Bitkub !!!')
+                time.sleep(botSetup_system_delay)
+        except Exception as error:
+            print('Core : ' + str(error))
+            time.sleep(botSetup_system_delay)
