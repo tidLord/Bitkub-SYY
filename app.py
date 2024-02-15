@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-bot_title = 'Bitkub-SYY 2.0 (Build 27) by tidLord'
+bot_title = 'Bitkub-SYY 2.0 (Build 28) by tidLord'
 
 # system setup
 botSetup_system_delay = 3
@@ -643,6 +643,14 @@ def on_message(connect, message):
                 show_skip_text()
                 return
         else: # ถ้ามีออเดอร์ในหน้าตัก
+            if ask < db_lastorder_price - db_pricerange: # buy dca
+                if db_ordercount < config['MAX_ORDER']:
+                    if ask_size_thb > db_firstorder_cost:
+                        if buy(db_firstorder_cost, 2) == 1:
+                            return
+                    else:
+                        show_skip_text()
+                        return
             if db_ordercount == 1: # ถ้ามีแค่ 1 ออเดอร์
                 if bid > db_lastorder_price + db_pricerange: # sell profit
                     if bid_size_coin > db_total_coin:
@@ -666,15 +674,6 @@ def on_message(connect, message):
                     else:
                         show_skip_text()
                         return
-                else:
-                    if ask < db_lastorder_price - db_pricerange: # buy dca
-                        if db_ordercount < config['MAX_ORDER']:
-                            if ask_size_thb > db_firstorder_cost:
-                                if buy(db_firstorder_cost, 2) == 1:
-                                    return
-                            else:
-                                show_skip_text()
-                                return
             
         #$$$$$$$$$$$$$$$$$$$$$$$$$$
         #   โชว์สถิติและข้อมูลออเดอร์   #
@@ -739,9 +738,9 @@ def on_message(connect, message):
 
         # check profit total
         if stats['profit_total'] == 0:
-            profit_total_show = 0.0
+            profit_total_show = str(0.0) + ' ฿'
         else:
-            profit_total_show = number_truncate(stats['profit_total'], botSetup_decimal_thb)
+            profit_total_show = number_truncate(stats['profit_total'], botSetup_decimal_thb) + ' ฿'
             
         data = [[profit_total_show, stats['circle_total']]]
         stats_table_show = termtables.to_string(
