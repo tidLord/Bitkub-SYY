@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 
-bot_title = 'Bitkub-SYY 2.0 (Build 28) by tidLord'
+bot_title = 'Bitkub-SYY 2.0 (Build 30) by tidLord'
 
 # system setup
 botSetup_system_delay = 3
 botSetup_ts_threshold = 60 # ค่าระยะห่าง(หน่วยเป็นวินาที) ไว้เช็คเมื่อบอทหยุดทำงาน
-botSetup_pid_threshold = 0 # ค่าระยะเวลาตรวจจับ last_active ป้องกันบอทรันซ้อนกัน
+botSetup_pid_threshold = 3 # ค่าระยะเวลาตรวจจับ last_active ป้องกันบอทรันซ้อนกัน
 botSetup_orders_verbose = True # เก็บรายละเอียดออเดอร์เข้า orders_verbose.txt
 botSetup_decimal_thb = 4 # จำนวนทศนิยม THB amount
 botSetup_decimal_coin = 8 # จำนวนทศนิยม COIN amount
@@ -273,7 +273,7 @@ def on_message(connect, message):
                     return
             else:
                 pid_signature = datetime.today().timestamp()
-                print('!!! Running bots repeatedly is not allowed. !!!')
+                print('!!! Running bots repeatedly is not allowed. Please Wait... !!!')
                 time.sleep(botSetup_pid_threshold)
                 return
         last_active_update(datetime_now)
@@ -567,15 +567,21 @@ def on_message(connect, message):
                     line(db_ordercount, 'buy', order_info['rate'], temp_for_order['amt'], 0, 0)
                 elif temp['cmd'] == 3:
                     temp_for_order = temp_read()['detail']['result']
-                    order_profit = temp_for_order['rec'] - db_total_base
+                    order_profit = (temp_for_order['rec'] + db_sold_total_profit) - db_total_base
                     db_ordercount = fetch_db_ordercount()
-                    dbcursor.execute('delete from orders where id=?',(db_ordercount,))
+                    dbcursor.execute('delete from sold')
+                    dbcursor.execute('delete from orders')
                     dbcon.commit()
                     print(f'-- SELL order filled ({temp["HASH"]}) --')
                     temp_write('', 0, '')
                     db_ordercount = fetch_db_ordercount()
                     stat_add_profit_total(order_profit)
-                    orders_verbose('sell', db_ordercount + 1, order_info)
+                    # ในกรณีมีการขาย dca แต่ไม่เข้าเงื่อนไข sell clear(5) ที่ต้องมีหลายออเดอร์ จะถือว่าเป็น sell clear profit
+                    if db_sold_total_profit == 0:
+                        sell_type = 'sell profit'
+                    else:
+                        sell_type = 'sell clear profit'
+                    orders_verbose(sell_type, db_ordercount + 1, order_info)
                     line(db_ordercount + 1, 'sell_profit', order_info['rate'], 0, order_profit, 0)
                 elif temp['cmd'] == 4:
                     temp_for_order = temp_read()['detail']['result']
@@ -592,7 +598,7 @@ def on_message(connect, message):
                     line(db_ordercount + 1, 'sell_dca', order_info['rate'], 0, 0, 0)
                 elif temp['cmd'] == 5:
                     temp_for_order = temp_read()['detail']['result']
-                    order_profit = temp_for_order['rec'] - (db_total_base - db_sold_total_profit)
+                    order_profit = (temp_for_order['rec'] + db_sold_total_profit) - db_total_base
                     db_ordercount = fetch_db_ordercount()
                     dbcursor.execute('delete from sold')
                     dbcursor.execute('delete from orders')
