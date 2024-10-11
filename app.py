@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-bot_title = 'Bitkub-SYY 2.0 (Build 30) by tidLord'
+bot_title = 'Bitkub-SYY 2.1 (Build 32) by tidLord'
 
 # system setup
 botSetup_system_delay = 3
@@ -19,7 +19,7 @@ fileName_temp = 'temp'
 fileName_last_active = 'last_active'
 fileName_database = 'Bitkub_SYY'
 
-import os, json, hmac, requests, hashlib, time, random, sqlite3, termtables, websocket
+import os, json, hmac, requests, hashlib, time, sqlite3, termtables, websocket
 from datetime import datetime
 from numpy import format_float_positional
 from pytz import timezone
@@ -115,7 +115,7 @@ def orders_verbose(order_type, order_number, order_detail):
                 f.write('\n' + str(datetime.now()) + '\norder type : ' + order_type + '\norder number : ' + str(order_number) + '\n' + str(order_detail) + '\n............\n')
         except Exception as error_is:
             print('orders_verbose() : ' + str(error_is))
-   
+
 # ฟังก์ชั่นเพิ่มจำนวนไม้ที่เทรดใส่ stat file
 def stat_add_circle_total():
     fileName_stat_txt = fileName_stat + '.json'
@@ -131,7 +131,7 @@ def stat_add_circle_total():
             json.dump(stat_json, update_stat_json, indent=4)
     except Exception as error_is:
         log('stat_add_circle_total() : ' + str(error_is))
-         
+
 # ฟังก์ชั่นเพิ่มยอดกำไรขาดทุนใส่ stat file
 def stat_add_profit_total(qty):
     fileName_stat_json = fileName_stat + '.json'
@@ -206,6 +206,82 @@ def last_active_update(datetime_now):
     fileName_last_active_txt = fileName_last_active + '.txt'
     with open(fileName_last_active_txt, 'w', encoding='utf-8') as last_active:
         last_active.write(str(datetime_now))
+        
+# ฟังก์ชั่นการแจ้งเตือนใน discord ผ่าน webhook
+def discord(thisOrder, notifyMsg, order_no, side, price, base_amt, profit, ordercount):
+    try:
+        if config['DISCORD'] == 1:
+            if thisOrder == True:
+                if side == 'buy':               
+                    msg = '\nออเดอร์ที่ : ' + str(order_no) + '\nซื้อ : ' + config['COIN'] + '\nที่ราคา : ' + str(price) + ' บาท' + '\nจำนวน : ' + number_truncate(base_amt, botSetup_decimal_thb) + ' บาท'
+                elif side == 'sell_profit':
+                    if profit >= 0:
+                        msg = '\nขาย : ' + config['COIN'] + '\nออเดอร์ที่ : ' + str(order_no) + '\nที่ราคา : ' + str(price) + ' บาท' + '\nกำไร : ' + number_truncate(profit, botSetup_decimal_thb) + ' บาท'
+                    else:
+                        msg = '\nขาย : ' + config['COIN'] + '\nออเดอร์ที่ : ' + str(order_no) + '\nที่ราคา : ' + str(price) + ' บาท' + '\nขาดทุน : ' + number_truncate(profit, botSetup_decimal_thb) + ' บาท'
+                elif side == 'sell_dca':
+                    if profit >= 0:
+                        msg = '\nขาย : ' + config['COIN'] + '\nออเดอร์ที่ : ' + str(order_no) + '\nที่ราคา : ' + str(price) + ' บาท'
+                    else:
+                        msg = '\nขาย : ' + config['COIN'] + '\nออเดอร์ที่ : ' + str(order_no) + '\nที่ราคา : ' + str(price) + ' บาท'
+                elif side == 'sell_clear': 
+                    msg = '\nเคลียร์ออเดอร์ : ' + config['COIN'] + '\nจำนวนออเดอร์ : ' + str(ordercount) + '\nที่ราคา : ' + str(price) + ' บาท' + '\nกำไรจากการเคลียร์ : ' + number_truncate(profit, botSetup_decimal_thb)+' บาท'
+            else:
+                msg = notifyMsg
+
+            data = {
+                "content" : msg,
+                "username" : "Bitkub-SYY by tidLord",
+                "avatar_url" : "https://i.ibb.co/fvcJgbK/076753456789.jpg"
+            }
+            result = requests.post(config['DISCORD_WEBHOOK_URL'], json = data)
+            try:
+                result.raise_for_status()
+            except requests.exceptions.HTTPError as error_is:
+                log('discord send error : '+str(error_is))
+                print('!!! discord send error !!!')
+    except Exception as error_is:
+        log('discord function error : '+str(error_is))
+        print('!!! discord function error !!!')
+
+# ฟังก์ชั่นเทรด
+def buy(credentials, ask, ordersize, cmd): # cmd 1 -> buy first order, 2 -> buy DCA
+    reqBody = {
+        'sym': config['COIN'].lower() + '_thb',
+        'amt': ordersize,
+        'rat': ask,
+        'typ': 'limit'
+    }
+    cmd_send = bitkub('POST', '/api/v3/market/place-bid', reqBody, credentials)
+
+    if cmd_send['error'] != 0:
+        print('buy() : Bitkub error code = ' + str(cmd_send['error']))
+        time.sleep(botSetup_system_delay)
+        return 0
+    else:
+        temp_write(cmd_send['result']['hash'], cmd, cmd_send)
+        return 1
+
+def sell(credentials, bid, ordersize, cmd): # cmd 3 -> sell profit, 4 -> sell dca, 5 -> sell clear
+    reqBody = {
+        'sym': config['COIN'].lower() + '_thb',
+        'amt': ordersize,
+        'rat': bid,
+        'typ': 'limit'
+    }   
+    cmd_send = bitkub('POST', '/api/v3/market/place-ask', reqBody, credentials)
+    
+    if cmd_send['error'] != 0:
+        print('sell() : Bitkub error code = ' + str(cmd_send['error']))
+        time.sleep(botSetup_system_delay)
+        return 0
+    else:
+        temp_write(cmd_send['result']['hash'], cmd, cmd_send)
+        return 1
+
+# ฟังก์ชั่นโชว์ข้อความบน console ในกรณี skip การส่งคำสั่ง
+def show_skip_text():
+    print('> Skip for safe filling')
 
 #########################
 ### $$$ Websocket $$$ ###
@@ -283,76 +359,21 @@ def on_message(connect, message):
         # *** แจ้งเตือนบอทหยุดทำงาน *** #
         ###############################
         try:
-            if config['LINE'] == 1 and ts_last_active_txt != 0:
+            if config['DISCORD'] == 1 and ts_last_active_txt != 0:
                 ts_now = datetime_now.timestamp()
                 #threshold ถ้าเวลาใน last_active file ต่างกับเวลาปัจจุบันเกินค่าที่ตั้งไว้
                 if ts_now - ts_last_active_txt > botSetup_ts_threshold:
                     str_last_active_txt = datetime.fromtimestamp(ts_last_active_txt).strftime('%d/%m/%y %H:%M:%S')
                     str_time_now = datetime.fromtimestamp(ts_now).strftime('%d/%m/%y %H:%M:%S')
-                    #LINE send
-                    headers = {'content-type': 'application/x-www-form-urlencoded', 'Authorization': 'Bearer ' + config['LINETOKEN']}                
+                    # ส่งแจ้งเตือน               
                     msg = '\nบอทหยุดทำงาน\nเมื่อ : ' + str_last_active_txt + '\nกลับมาทำงานเมื่อ : ' + str_time_now
-                    requests.post('https://notify-api.line.me/api/notify', headers=headers, data = {'message': msg})
+                    discord(False, msg, None, None, None, None, None, None)
         except Exception as error_is:
             print('check_bot_stop : '+str(error_is))
             log('check_bot_stop : '+str(error_is))
             time.sleep(botSetup_system_delay)
             return
         ###############################
-        
-        ##############################
-        # *** LINE แจ้งเตือนออเดอร์ *** #
-        ##############################
-        def line(order_no, side, price, base_amt, profit, ordercount):
-            try:
-                if config['LINE'] == 1:  
-                    stickers_open = ['17839', '17849', '17852', '17851', '17860', '17861', '17866', '17878']
-                    stickers_profit = ['17840', '17842', '17844', '17847', '17854']
-                    stickers_loss = ['17855', '17856', '17857', '17858', '17859', '17868', '17870', '17873']
-                    if side == 'buy':
-                        linesticker = random.choice(stickers_open)
-                        headers = {'content-type': 'application/x-www-form-urlencoded', 'Authorization': 'Bearer ' + config['LINETOKEN']}                
-                        msg = '\nออเดอร์ที่ : ' + str(order_no) + '\nซื้อ : ' + config['COIN'] + '\nที่ราคา : ' + str(price) + ' บาท' + '\nจำนวน : ' + number_truncate(base_amt, botSetup_decimal_thb) + ' บาท'
-                        s = requests.post('https://notify-api.line.me/api/notify', headers=headers, data = {'message': msg, 'stickerPackageId': '1070', 'stickerId': linesticker})
-                        if s.status_code != 200:
-                            log('!!! line send error !!!')
-                            print('!!! line send error !!!')
-                    elif side == 'sell_profit':
-                        if profit >= 0:
-                            msg = '\nขาย : ' + config['COIN'] + '\nออเดอร์ที่ : ' + str(order_no) + '\nที่ราคา : ' + str(price) + ' บาท' + '\nกำไร : ' + number_truncate(profit, botSetup_decimal_thb) + ' บาท'
-                            linesticker = random.choice(stickers_profit)
-                        else:
-                            msg = '\nขาย : ' + config['COIN'] + '\nออเดอร์ที่ : ' + str(order_no) + '\nที่ราคา : ' + str(price) + ' บาท' + '\nขาดทุน : ' + number_truncate(profit, botSetup_decimal_thb) + ' บาท'
-                            linesticker = random.choice(stickers_loss)
-                        headers = {'content-type':'application/x-www-form-urlencoded','Authorization':'Bearer '+config['LINETOKEN']}
-                        s= requests.post('https://notify-api.line.me/api/notify', headers=headers, data = {'message': msg, 'stickerPackageId': '1070', 'stickerId':linesticker}) 
-                        if s.status_code != 200:
-                            log('!!! line send error !!!')
-                            print('!!! line send error !!!') 
-                    elif side == 'sell_dca':
-                        if profit >= 0:
-                            msg = '\nขาย : ' + config['COIN'] + '\nออเดอร์ที่ : ' + str(order_no) + '\nที่ราคา : ' + str(price) + ' บาท'
-                            linesticker = random.choice(stickers_profit)
-                        else:
-                            msg = '\nขาย : ' + config['COIN'] + '\nออเดอร์ที่ : ' + str(order_no) + '\nที่ราคา : ' + str(price) + ' บาท'
-                            linesticker = random.choice(stickers_loss)
-                        headers = {'content-type': 'application/x-www-form-urlencoded', 'Authorization': 'Bearer ' + config['LINETOKEN']}
-                        s= requests.post('https://notify-api.line.me/api/notify', headers=headers, data = {'message': msg, 'stickerPackageId': '1070', 'stickerId': linesticker}) 
-                        if s.status_code != 200:
-                            log('!!! line send error !!!')
-                            print('!!! line send error !!!')
-                    elif side == 'sell_clear': 
-                        msg = '\nเคลียร์ออเดอร์ : ' + config['COIN'] + '\nจำนวนออเดอร์ : ' + str(ordercount) + '\nที่ราคา : ' + str(price) + ' บาท' + '\nกำไรจากการเคลียร์ : ' + number_truncate(profit, botSetup_decimal_thb)+' บาท'
-                        linesticker = random.choice(stickers_profit)
-                        headers = {'content-type': 'application/x-www-form-urlencoded', 'Authorization': 'Bearer '+ config['LINETOKEN']}
-                        s= requests.post('https://notify-api.line.me/api/notify', headers=headers, data = {'message': msg, 'stickerPackageId': '1070', 'stickerId': linesticker}) 
-                        if s.status_code != 200:
-                            log('!!! line send error !!!')
-                            print('!!! line send error !!!')
-            except Exception as error_is:
-                log('line function error : '+str(error_is))
-                print('!!! line function error !!!')
-        ##############################
         
         ##############################
         # *** ระบบฐานข้อมูลของบอท *** #
@@ -437,7 +458,7 @@ def on_message(connect, message):
             break_even = (((((db_total_fee / db_total_base) * 100) * 2) / 100) * ((db_total_base - db_sold_total_profit) / db_total_coin)) + ((db_total_base - db_sold_total_profit) / db_total_coin)
         else:
             break_even = None
-             
+
         # Ask, Bid
         try:
             msg = json.loads(message)
@@ -487,42 +508,6 @@ def on_message(connect, message):
             print('circle_period : ' + str(error_is))
             return
         
-        ################
-        # *** เทรด *** #
-        ################
-        def buy(ordersize, cmd): # cmd 1 -> buy first order, 2 -> buy DCA
-            reqBody = {
-                'sym': config['COIN'].lower() + '_thb',
-                'amt': ordersize,
-                'rat': ask,
-                'typ': 'limit'
-            }
-            cmd_send = bitkub('POST', '/api/v3/market/place-bid', reqBody, credentials)
-   
-            if cmd_send['error'] != 0:
-                print('buy() : Bitkub error code = ' + str(cmd_send['error']))
-                time.sleep(botSetup_system_delay)
-                return 0
-            else:
-                temp_write(cmd_send['result']['hash'], cmd, cmd_send)
-                return 1
-
-        def sell(ordersize, cmd): # cmd 3 -> sell profit, 4 -> sell dca, 5 -> sell clear
-            reqBody = {
-                'sym': config['COIN'].lower() + '_thb',
-                'amt': ordersize,
-                'rat': bid,
-                'typ': 'limit'
-            }   
-            cmd_send = bitkub('POST', '/api/v3/market/place-ask', reqBody, credentials)
-            
-            if cmd_send['error'] != 0:
-                print('sell() : Bitkub error code = ' + str(cmd_send['error']))
-                time.sleep(botSetup_system_delay)
-                return 0
-            else:
-                temp_write(cmd_send['result']['hash'], cmd, cmd_send)
-                return 1
             
         def order_operate():
             temp = temp_read()
@@ -554,7 +539,7 @@ def on_message(connect, message):
                     print(f'> OrderCount ({db_ordercount}/{config["MAX_ORDER"]})')
                     stat_add_circle_total()
                     orders_verbose('buy', db_ordercount, order_info)
-                    line(db_ordercount, 'buy', order_info['rate'], temp_for_order['amt'], 0, 0)
+                    discord(True, None, db_ordercount, 'buy', order_info['rate'], temp_for_order['amt'], 0, 0)
                 elif temp['cmd'] == 2:
                     temp_for_order = temp_read()['detail']['result']
                     dbcursor.execute('insert into orders (rate, base_amt, coin_amt, fee_amt, pricerange, ts)values(?, ?, ?, ?, ?, ?)',(temp_for_order['rat'], temp_for_order['amt'], temp_for_order['rec'], temp_for_order['fee'], 0, temp_for_order['ts']))
@@ -564,7 +549,7 @@ def on_message(connect, message):
                     db_ordercount = fetch_db_ordercount()
                     print(f'> OrderCount ({db_ordercount}/{config["MAX_ORDER"]})')
                     orders_verbose('buy DCA', db_ordercount, order_info)
-                    line(db_ordercount, 'buy', order_info['rate'], temp_for_order['amt'], 0, 0)
+                    discord(True, None, db_ordercount, 'buy', order_info['rate'], temp_for_order['amt'], 0, 0)
                 elif temp['cmd'] == 3:
                     temp_for_order = temp_read()['detail']['result']
                     order_profit = (temp_for_order['rec'] + db_sold_total_profit) - db_total_base
@@ -582,7 +567,7 @@ def on_message(connect, message):
                     else:
                         sell_type = 'sell clear profit'
                     orders_verbose(sell_type, db_ordercount + 1, order_info)
-                    line(db_ordercount + 1, 'sell_profit', order_info['rate'], 0, order_profit, 0)
+                    discord(True, None, db_ordercount + 1, 'sell_profit', order_info['rate'], 0, order_profit, 0)
                 elif temp['cmd'] == 4:
                     temp_for_order = temp_read()['detail']['result']
                     order_profit = temp_for_order['rec'] - db_lastorder_base_amt
@@ -595,7 +580,7 @@ def on_message(connect, message):
                     db_ordercount = fetch_db_ordercount()
                     print(f'> OrderCount ({db_ordercount}/{config["MAX_ORDER"]})')
                     orders_verbose('sell dca', db_ordercount + 1, order_info)
-                    line(db_ordercount + 1, 'sell_dca', order_info['rate'], 0, 0, 0)
+                    discord(True, None, db_ordercount + 1, 'sell_dca', order_info['rate'], 0, 0, 0)
                 elif temp['cmd'] == 5:
                     temp_for_order = temp_read()['detail']['result']
                     order_profit = (temp_for_order['rec'] + db_sold_total_profit) - db_total_base
@@ -607,7 +592,7 @@ def on_message(connect, message):
                     temp_write('', 0, '')
                     stat_add_profit_total(order_profit)
                     orders_verbose('sell clear', db_ordercount, order_info)
-                    line(0, 'sell_clear', order_info['rate'], 0, order_profit, db_ordercount)
+                    discord(True, None, 0, 'sell_clear', order_info['rate'], 0, order_profit, db_ordercount)
                 return 1
                 
         # $$$$$$$$$$$$$$$$$$$$$$$ #
@@ -617,11 +602,7 @@ def on_message(connect, message):
         # เช็คว่ามี hash ค้างไหม ถ้ามีแล้วถูก operate ให้ return
         if order_operate() == 1:
             return
-        
-        # ฟังก์ชั่นโชว์ข้อความบน console ในกรณี skip การส่งคำสั่ง
-        def show_skip_text():
-            print('> Skip for safe filling')
-        
+
         if db_ordercount < 1: # ถ้าไม่มีออเดอร์ในหน้าตัก
             # เช็คว่า config อนุญาตไหม (stopnextcircle = 0 หรือเปล่า)
             if config['STOPNEXTCIRCLE'] != 0:
@@ -643,7 +624,7 @@ def on_message(connect, message):
                 return
             # ส่งคำสั่งซื้อออเดอร์แรก ถ้าส่งคำสั่งสำเร็จให้ return
             if ask_size_thb > ordersize:
-                if buy(ordersize, 1) == 1:
+                if buy(credentials, ask, ordersize, 1) == 1:
                     return
             else:
                 show_skip_text()
@@ -652,7 +633,7 @@ def on_message(connect, message):
             if ask < db_lastorder_price - db_pricerange: # buy dca
                 if db_ordercount < config['MAX_ORDER']:
                     if ask_size_thb > db_firstorder_cost:
-                        if buy(db_firstorder_cost, 2) == 1:
+                        if buy(credentials, ask, db_firstorder_cost, 2) == 1:
                             return
                     else:
                         show_skip_text()
@@ -660,7 +641,7 @@ def on_message(connect, message):
             if db_ordercount == 1: # ถ้ามีแค่ 1 ออเดอร์
                 if bid > db_lastorder_price + db_pricerange: # sell profit
                     if bid_size_coin > db_total_coin:
-                        if sell(db_total_coin, 3) == 1:
+                        if sell(credentials, bid, db_total_coin, 3) == 1:
                             return
                     else:
                         show_skip_text()
@@ -668,14 +649,14 @@ def on_message(connect, message):
             else: # ถ้ามี 2 ออเดอร์ขึ้นไป
                 if bid >= break_even: # sell clear
                     if bid_size_coin > db_total_coin:
-                        if sell(db_total_coin, 5) == 1:
+                        if sell(credentials, bid, db_total_coin, 5) == 1:
                             return
                         else:
                             show_skip_text()
                             return
                 elif bid >= db_dca_sell_price: # sell dca
                     if bid_size_coin > db_lastorder_coin_amt:
-                        if sell(db_lastorder_coin_amt, 4) == 1:
+                        if sell(credentials, bid, db_lastorder_coin_amt, 4) == 1:
                             return
                     else:
                         show_skip_text()
@@ -713,7 +694,7 @@ def on_message(connect, message):
         dbcursor.execute('select * from orders')
         db_res = dbcursor.fetchall()
         
-         #ordercount for show
+        #ordercount for show
         if db_ordercount < config['MAX_ORDER']:
             order_table_order_count = Style.BRIGHT + 'OrderCount' + Style.RESET_ALL + ' : ' + str(len(db_res)) + '/' + str(config['MAX_ORDER'])
         else:

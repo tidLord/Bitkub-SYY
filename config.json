@@ -2,8 +2,8 @@
     "KEY": "",
     "SECRET": "",
 
-    "LINETOKEN": "",
-    "LINE": 0,
+    "DISCORD_WEBHOOK_URL": "",
+    "DISCORD": 0,
 
     "COIN": "KUB",
     "ALL_IN": 0,
