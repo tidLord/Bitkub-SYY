@@ -3,7 +3,7 @@
 บอทเทรดสำหรับกระดานเทรดบิทคับ กลยุทธ์ซอยยิกยิก รับข้อมูลราคาสำหรับการคำนวณเพื่อซื้อขายจากเซิร์ฟเวอร์ของบิทคับผ่าน websocket และการส่งคำสั่งซื้อขายแบบ limit order ทำให้บอททำงานด้วยข้อมูลที่ realtime และส่งคำสั่งซื้อขายได้อย่างแม่นยำ
 
 ### มีอะไรเพิ่มมาใน 2.1
-เปลี่ยนมาใช้ Discord Webhook แทนการใช้ LINE notify สำหรับการแจ้งเตือน เนื่องจาก LINE notify จะยุติการให้บริการ([https://linedevth.line.me/th/knowledge-api/discontinued-line-notify](https://linedevth.line.me/th/knowledge-api/discontinued-line-notify))
+เปลี่ยนมาใช้ Discord Webhook แทนการใช้ LINE notify สำหรับการแจ้งเตือน เนื่องจาก LINE Notify จะยุติการให้บริการ([https://linedevth.line.me/th/knowledge-api/discontinued-line-notify](https://linedevth.line.me/th/knowledge-api/discontinued-line-notify))
 
 ## กลยุทธ์ซอยยิกยิก
 มีพื้นฐานมาจากระบบ grid  ในกรณีที่ราคาร่วงลงต่ำกว่าจุดที่เข้าซื้อ จะใช้วิธีการสะสมออเดอร์(DCA) แก้ทางตลาด และมีการประยุกต์ทำให้ออเดอร์ที่ซื้อสะสมสามารถซื้อขายทำกำไรเพื่อดึงจุดคุ้มทุนให้ต่ำลงได้
