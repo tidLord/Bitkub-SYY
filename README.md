@@ -1,9 +1,9 @@
 
-# Bitkub-SYY 2.1 (Bitkub API V3)
+# Bitkub-SYY 2.2 (Bitkub API V3)
 บอทเทรดสำหรับกระดานเทรดบิทคับ กลยุทธ์ซอยยิกยิก รับข้อมูลราคาสำหรับการคำนวณเพื่อซื้อขายจากเซิร์ฟเวอร์ของบิทคับผ่าน websocket และการส่งคำสั่งซื้อขายแบบ limit order ทำให้บอททำงานด้วยข้อมูลที่ realtime และส่งคำสั่งซื้อขายได้อย่างแม่นยำ
 
-### มีอะไรเพิ่มมาใน 2.1
-เปลี่ยนมาใช้ Discord Webhook แทนการใช้ LINE notify สำหรับการแจ้งเตือน เนื่องจาก LINE Notify จะยุติการให้บริการ([https://linedevth.line.me/th/knowledge-api/discontinued-line-notify](https://linedevth.line.me/th/knowledge-api/discontinued-line-notify))
+### สิ่งที่ปรับปรุงในเวอร์ชั่น 2.2
+เช็คสถานะคำสั่งซื้อและขายด้วย id แทน hash เนื่องจากบิทคับประกาศยกเลิกการใช้งาน hash ([https://support.bitkub.com/en/support/solutions/articles/151000205895-notice-deprecation-of-order-hash-from-public-api-on-28-02-2025-onwards](https://support.bitkub.com/en/support/solutions/articles/151000205895-notice-deprecation-of-order-hash-from-public-api-on-28-02-2025-onwards))
 
 ## กลยุทธ์ซอยยิกยิก
 มีพื้นฐานมาจากระบบ grid  ในกรณีที่ราคาร่วงลงต่ำกว่าจุดที่เข้าซื้อ จะใช้วิธีการสะสมออเดอร์(DCA) แก้ทางตลาด และมีการประยุกต์ทำให้ออเดอร์ที่ซื้อสะสมสามารถซื้อขายทำกำไรเพื่อดึงจุดคุ้มทุนให้ต่ำลงได้
@@ -111,14 +111,10 @@ clone repo :
 จากนั้นก็รันเลยครับ โดยส่วนตัวผมใช้ [PM2](https://pm2.keymetrics.io/) ครับ ชอบที่ monitor ผ่านหน้าเว็บได้
 
 ## หมายเหตุ
-- ผู้พัฒนาใช้ Python เวอร์ชั่น 3.12.1 พัฒนาบน Windows 11 นะครับ
+- ผู้พัฒนาใช้ Python เวอร์ชั่น 3.13.3 พัฒนาบน Windows 11 นะครับ
 
 - โปรเจคนี้ใช้ชื่อว่า Bitkub-SYY มีคำว่า Bitkub ก็จริง แต่ไม่ได้มีความเกี่ยวข้องใดๆกับบริษัทบิทคับนะครับ ผมเป็นเพียงลูกค้าและผู้ใช้บริการเขาคนหนึ่งเท่านั้น ที่ต้องตั้งชื่อแล้วมีคำว่า Bitkub เพราะบอทโปรเจคนี้สร้างขึ้นมาเพื่อเทรดแค่กับบิทคับเท่านั้นครับ
 - ผมทำบอทเทรดเป็นงานอดิเรก เอามาแจกจ่ายเพื่อความสนุกสนานและหวังว่าจะเป็นประโยชน์กับผู้ที่สนใจเท่านั้น นี่ไม่ได้เป็นการชักชวนใครมาลงทุนนะครับ การลงทุนมีความเสี่ยง การใช้บอทมีความเสี่ยง ถ้าเกิดความผิดพลาดไม่ว่าจะจากตัวกลยุทธ์ จากข้อผิดพลาดของโค๊ดหรือตัวโปรแกรม ผมจะไม่รับผิดชอบทุกกรณี  โปรดพิจาณาและตัดสินใจด้วยตัวท่านเองก่อนใช้งานครับ
    
 ##  Donate
 <a href="https://www.buymeacoffee.com/tar888" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>
-
-สมัครบัญชี Bitkub ผ่าน Referral Link ของผมได้ที่ : [https://www.bitkub.com/signup?ref=348152](https://www.bitkub.com/signup?ref=348152)
-
-(ย้ำนะครับ นี่ไม่ได้เป็นการชักชวนใครมาลงทุน)
