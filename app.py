@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-bot_title = 'Bitkub-SYY 2.1 (Build 32) by tidLord'
+bot_title = 'Bitkub-SYY 2.2 (Build 33) by tidLord'
 
 # system setup
 botSetup_system_delay = 3
@@ -259,7 +259,7 @@ def buy(credentials, ask, ordersize, cmd): # cmd 1 -> buy first order, 2 -> buy 
         time.sleep(botSetup_system_delay)
         return 0
     else:
-        temp_write(cmd_send['result']['hash'], cmd, cmd_send)
+        temp_write(cmd_send['result']['id'], cmd, cmd_send)
         return 1
 
 def sell(credentials, bid, ordersize, cmd): # cmd 3 -> sell profit, 4 -> sell dca, 5 -> sell clear
@@ -276,7 +276,7 @@ def sell(credentials, bid, ordersize, cmd): # cmd 3 -> sell profit, 4 -> sell dc
         time.sleep(botSetup_system_delay)
         return 0
     else:
-        temp_write(cmd_send['result']['hash'], cmd, cmd_send)
+        temp_write(cmd_send['result']['id'], cmd, cmd_send)
         return 1
 
 # ฟังก์ชั่นโชว์ข้อความบน console ในกรณี skip การส่งคำสั่ง
@@ -511,12 +511,19 @@ def on_message(connect, message):
             
         def order_operate():
             temp = temp_read()
+            # เพิ่มเงื่อนไข Check OrderSide ()
+            if temp_read()['cmd'] == 1 or temp_read()['cmd'] == 2:
+                sd = 'buy'
+            else:
+                sd = 'sell'
+            
             if temp['HASH'] == '':
                 return 0
             else:
                 reqBody = {
                     'sym': config['COIN'].lower() + '_thb',
-                    'hash': temp['HASH'],
+                    'id': temp['HASH'],
+                    'sd': sd
                 }
                 order_info = bitkub('GET', '/api/v3/market/order-info', reqBody, credentials)['result']
                 
